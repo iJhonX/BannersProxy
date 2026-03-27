@@ -26,9 +26,19 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '5mb' }));
 
-// =========================================================================
-// MOCK API: Recibe los JSON como si fuera el backend real para simular CosmosDB
-// =========================================================================
+// ── Health check (ruta raíz) ──────────────────────────────────────────────
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'Banners Proxy – Kevins.com.co',
+    endpoints: {
+      kevins : `${BASE_URL}/kevins`,
+      tracker: `${BASE_URL}/tracker.js`,
+      save   : `POST ${BASE_URL}/api/banners/save`
+    }
+  });
+});
+
 
 app.post('/api/banners/save', (req, res) => {
     
