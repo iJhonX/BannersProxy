@@ -500,7 +500,13 @@ app.use('/kevins', async (req, res) => {
       //    el router de kevins use rutas del proxy (/kevins/ruta)
       //    y pushState sea siempre same-origin (localhost:3001)
       const baseTag    = `<base href="/kevins/">`;
-      const trackerTag = `<script src="${BASE_URL}/tracker.js?t=${Date.now()}"></script>`;
+      // Derivar la URL pública del proxy desde los headers del request.
+      // En Render: x-forwarded-proto = https, x-forwarded-host = bannersproxy.onrender.com
+      // En local : host = localhost:3001
+      const reqProto   = req.headers['x-forwarded-proto'] || 'http';
+      const reqHost    = req.headers['x-forwarded-host'] || req.headers['host'] || `localhost:${PORT}`;
+      const reqBaseUrl = `${reqProto}://${reqHost}`;
+      const trackerTag = `<script src="${reqBaseUrl}/tracker.js?t=${Date.now()}"></script>`;
       const headScript = getHeadScript();
 
       // Inyectar PRIMERO en <head> (antes de scripts de kevins)
