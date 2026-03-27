@@ -1,0 +1,17 @@
+{
+  "name": "banners-proxy",
+  "version": "1.0.0",
+  "description": "Proxy HTTP para Kevins.com.co — Gestor de Banners",
+  "main": "proxy-server.js",
+  "scripts": {
+    "start": "node proxy-server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
+  }
+}

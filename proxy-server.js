@@ -1,0 +1,514 @@
+const express = require('express');
+const axios   = require('axios');
+const cors    = require('cors');
+const zlib    = require('zlib');
+const fs      = require('fs');
+const path    = require('path');
+
+const app    = express();
+const TARGET = 'https://kevins.com.co';
+
+// Render asigna un puerto dinámico via variable de entorno.
+// Localmente usamos 3001 como fallback.
+const PORT     = process.env.PORT || 3001;
+
+// URL pública del proxy. En Render, se lee de la variable de entorno.
+// En local, usamos localhost. Se usa para la inyección del tracker.js.
+const BASE_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+
+// Middleware manual de CORS a prueba de balas
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Content-Length, X-Requested-With');
+    if (req.method === 'OPTIONS') return res.sendStatus(200);
+    next();
+});
+app.use(express.json({ limit: '5mb' }));
+
+// =========================================================================
+// MOCK API: Recibe los JSON como si fuera el backend real para simular CosmosDB
+// =========================================================================
+
+app.post('/api/banners/save', (req, res) => {
+    
+    const payload = req.body;
+    console.log("======================================================================");
+    console.log("=== [MOCK DB] Recibido payload para inyectar a Cosmos DB =============");
+    console.log("======================================================================");
+    console.log(JSON.stringify(payload, null, 2));
+    
+    // Guardar en archivo local
+    fs.writeFileSync(path.join(process.cwd(), 'banners-mock-db.json'), JSON.stringify(payload, null, 2));
+    console.log("=== Payload simulado guardado exitosamente en banners-mock-db.json ===");
+    console.log("======================================================================");
+    
+    res.json({ success: true, message: 'Inyectado exitosamente.' });
+});
+
+// =========================================================================
+// TRACKER: Script inyectado al final del <body> de cada página de Kevins.
+// Detecta la navegación del usuario dentro del iframe y envía postMessage
+// al componente Angular padre (iframe-panel) con la URL actual.
+// =========================================================================
+app.get('/tracker.js', (req, res) => {
+  res.type('application/javascript');
+  res.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.send(`
+    (function(){
+      const ORIGINAL = 'https://kevins.com.co';
+
+      // ── Convierte URLs del proxy (localhost) a la URL original de kevins ──
+      function toOriginal(url) {
+        if (!url) return url;
+        if (url.includes('localhost')) {
+          const match = url.match(/localhost:\\d+(?:\\/kevins)?(\\/.*)?$/);
+          return ORIGINAL + (match && match[1] ? match[1] : '/');
+        }
+        if (url.startsWith(ORIGINAL)) return url;
+        if (url.startsWith('/kevins/')) return ORIGINAL + url.substring('/kevins'.length);
+        if (url.startsWith('/')) return ORIGINAL + url;
+        return url;
+      }
+
+      // ── Envía un mensaje al componente Angular padre ──
+      function post(tipo, payload) {
+        try {
+          window.parent.postMessage(Object.assign({ tipo: tipo }, payload || {}), '*');
+        } catch(e) {}
+      }
+
+      // ── DEBOUNCE: Evita enviar muchos mensajes seguidos (ej: al navegar menús) ──
+      var _debounceTimer = null;
+      var DEBOUNCE_MS    = 500;
+      function postDebounced(tipo, payload) {
+        clearTimeout(_debounceTimer);
+        _debounceTimer = setTimeout(function() { post(tipo, payload); }, DEBOUNCE_MS);
+      }
+
+      // ── Evento popstate (botón atrás/adelante del navegador) ──
+      window.addEventListener('popstate', function() {
+        postDebounced('navegacion', { url: toOriginal(window.location.href) });
+      });
+
+      // ── CLICK GENERAL ──
+      // Usamos fase de BURBUJA (false) en vez de captura (true)
+      document.addEventListener('click', function(e) {
+        var target = e.target;
+        var before = window.location.href;
+        var pick   = target && target.closest
+          ? target.closest('a, button, [href], [onclick], [role="button"], [data-href]')
+          : null;
+
+        // Buscar primero si lo clickeado fue directamente la imagen, o si hay una imagen dentro del link/botón
+        var imgTarget = target.tagName === 'IMG' || target.tagName === 'VIDEO' ? target : null;
+        if (!imgTarget && pick) {
+            imgTarget = pick.querySelector('img, video');
+        }
+        if (!imgTarget) {
+            var slidePadre = target.closest('[class*="slide" i], [class*="item" i], [class*="banner" i]');
+            if (slidePadre) imgTarget = slidePadre.querySelector('img, video');
+        }
+
+        var srcClickeado = imgTarget ? (imgTarget.currentSrc || imgTarget.src) : '';
+        if (srcClickeado) srcClickeado = toOriginal(srcClickeado);
+
+        var texto    = pick ? (pick.textContent || '').trim().slice(0, 80) : '';
+        var elemento = pick
+          ? (pick.tagName + (pick.className ? '.' + String(pick.className).split(' ')[0] : ''))
+          : 'UNKNOWN';
+
+        // Esperamos a que el router SPA de Kevins procese la navegación
+        setTimeout(function() {
+          var after = window.location.href;
+
+          // CASO 1: La URL cambió → la nueva URL es la categoría/producto
+          if (after !== before) {
+            postDebounced('clickReal', {
+              url      : toOriginal(after),
+              texto    : texto,
+              titulo   : document.title,
+              posicion : { x: Math.round(e.clientX), y: Math.round(e.clientY) },
+              elemento : elemento,
+              srcClick : srcClickeado,
+              timestamp: Date.now()
+            });
+            return;
+          }
+
+          // CASO 2: La URL no cambió pero el elemento tiene href directo
+          var href = pick && (pick.href || pick.getAttribute('href') || pick.dataset.href || '');
+          if (href && !href.startsWith('javascript') && !href.startsWith('#')) {
+            postDebounced('clickReal', {
+              url      : toOriginal(href),
+              texto    : texto,
+              titulo   : document.title,
+              posicion : { x: Math.round(e.clientX), y: Math.round(e.clientY) },
+              elemento : elemento,
+              srcClick : srcClickeado,
+              timestamp: Date.now()
+            });
+            return;
+          }
+
+          // CASO 3: Sin cambio → no reportar para no pisar URLs previas
+        }, 300);
+
+      }, false);  // false = fase de BURBUJA (deja que los menús procesen primero)
+
+      // URL inicial al cargar la página
+      post('navegacion', { url: toOriginal(window.location.href) });
+      console.log('Tracker activo (con debounce)');
+
+      // ── EXTRAER BANNERS DE LA PÁGINA (SOLO LOBBY PRINCIPAL .webp) ──
+      function extraerBanners() {
+        var path = window.location.pathname;
+        if (path !== '/' && path !== '/kevins/') return;
+        
+        var images = document.querySelectorAll('img, video');
+        var banners = [];
+        var vistas = {};
+        window._lobbyContainer = null; // Reiniciar en cada ejecución por seguridad SPA
+        
+        for(var i = 0; i < images.length; i++) {
+          var el = images[i];
+          var src = el.currentSrc || el.src;
+          var isVideo = el.tagName.toLowerCase() === 'video';
+          
+          if (!src && isVideo) {
+             var source = el.querySelector('source');
+             if (source) src = source.src;
+          }
+          if (!src || vistas[src]) continue;
+          
+          var lowerSrc = src.toLowerCase();
+          
+          // REGLA 1: Solo formato .webp como pediste o que sea un video
+          var isFormatoValido = lowerSrc.indexOf('.webp') !== -1 || lowerSrc.indexOf('.mp4') !== -1 || lowerSrc.indexOf('.webm') !== -1 || isVideo;
+          if (!isFormatoValido) continue;
+          
+          var rect = el.getBoundingClientRect();
+          var absoluteTop = window.scrollY + rect.top;
+
+          // REGLA 2: LÍMITE FÍSICO. Si la imagen está renderizada muy abajo en la pantalla (ej: Footer), la descartamos inmediatamente.
+          if (absoluteTop > 1500) continue;
+
+          var isInSlider = el.closest('[class*="slider" i], [class*="carousel" i], [class*="swiper" i]');
+          // En caso de que el video aún no tenga dimensiones calculadas, 
+          // confiamos más en si está en un slider.
+          var isLargeBanner = (rect.width > 500 || el.width > 500);
+          
+          if (!isInSlider && !isLargeBanner) continue;
+          
+          // REGLA DEFINITIVA: El primer banner grande o slider que encontremos 
+          // definirá el contenedor único del que sacaremos los banners.
+          if (!window._lobbyContainer) {
+             window._lobbyContainer = isInSlider || el.parentElement;
+          }
+          
+          // Ignorar cualquier cosa fuera de la cabecera / lobby inicial
+          if (!window._lobbyContainer.contains(el)) continue;
+          
+          vistas[src] = true;
+          
+          var srcMobile = '';
+          var srcWeb = '';
+
+          var picturePadre = el.closest('picture');
+          if (picturePadre) {
+             var sources = picturePadre.querySelectorAll('source');
+             for (var s = 0; s < sources.length; s++) {
+                 var media = sources[s].getAttribute('media') || '';
+                 var srcset = sources[s].getAttribute('srcset');
+                 if (!srcset) continue;
+                 var parsedUrl = toOriginal(srcset.split(' ')[0]);
+                 
+                 // El web suele tener min-width, el mobile max-width
+                 if (media.includes('max-width') || media.includes('mobile') || parsedUrl.includes('_Mobile') || parsedUrl.includes('_mobile')) {
+                     if (!srcMobile) srcMobile = parsedUrl;
+                 } else if (media.includes('min-width') || media.includes('desktop') || parsedUrl.includes('_WEB') || parsedUrl.includes('_web')) {
+                     if (!srcWeb) srcWeb = parsedUrl;
+                 }
+             }
+          }
+
+          // Si identificamos explícitamente el Web y el Mobile dentro del picture
+          if (srcWeb) {
+             src = srcWeb; // Forzar el src principal a ser el WEB
+          } else if (typeof src === 'string' && (src.includes('_Mobile') || src.includes('_mobile'))) {
+             // Si no hay picture pero la imagen suelta es la móvil (lo cual ocurre al escanear headless viewport), lo invertimos.
+             srcMobile = toOriginal(src);
+             src = toOriginal(src.replace('_Mobile', '_WEB').replace('_mobile', '_WEB'));
+          } else if (!srcMobile && typeof src === 'string') {
+             // Fallback Heurístico para detectar el móvil si solo tenemos el WEB
+             if (src.includes('_WEB')) {
+                 srcMobile = toOriginal(src.replace('_WEB', '_Mobile'));
+             } else if (src.includes('_web')) {
+                 srcMobile = toOriginal(src.replace('_web', '_mobile'));
+             }
+          }
+
+          src = toOriginal(src);
+
+          var extension = isVideo ? '.mp4' : '.webp';
+          var archivo = 'Banner ' + (banners.length + 1) + extension;
+          try {
+            var parts = new URL(src).pathname.split('/');
+            var decoded = decodeURIComponent(parts[parts.length - 1]);
+            // Limpiamos queries si las hay
+            decoded = decoded.split('?')[0];
+            if (decoded.includes('.webp') || decoded.includes('.mp4') || decoded.includes('.webm')) {
+                archivo = decoded;
+            }
+          } catch(e) {}
+          
+          var aTag = el.closest('a');
+          var enlaceUrl = aTag ? (aTag.getAttribute('href') || aTag.href) : '';
+          
+          if (!enlaceUrl) {
+              // Si la imagen/video no está envuelto en <a>, buscar en su contenedor (ej: swiper-slide)
+              var slidePadre = el.closest('[class*="slide" i], [class*="item" i], div');
+              if (slidePadre) {
+                  var aHijo = slidePadre.querySelector('a');
+                  if (aHijo) {
+                      enlaceUrl = aHijo.getAttribute('href') || aHijo.href;
+                  }
+                  // Si es un div clickeable de Angular (routerLink)
+                  if (!enlaceUrl) {
+                      enlaceUrl = slidePadre.getAttribute('ng-reflect-router-link') || slidePadre.getAttribute('data-href') || '';
+                  }
+              }
+              // Comprobación directa en los padres más cercanos por si tienen routerLink
+              if (!enlaceUrl && el.parentElement) {
+                  enlaceUrl = el.parentElement.getAttribute('ng-reflect-router-link') || '';
+              }
+              if (!enlaceUrl) {
+                  enlaceUrl = el.getAttribute('ng-reflect-router-link') || '';
+              }
+          }
+
+          banners.push({
+            id: 'banner-auto-' + banners.length,
+            archivo: archivo,
+            activo: true, // UI
+            type: isVideo ? 'VIDEO' : 'IMAGEN',
+            src: toOriginal(src),
+            srcMobile: srcMobile,
+            tieneMobile: !!srcMobile, // Indicar a la UI explícitamente que detectamos imagen móvil
+            alt: archivo,
+            seccion: 'home',
+            ruta: enlaceUrl,
+            usuario: 'tracker-auto',
+            duracion: 5000,
+            orden: 0 // Se asigna después
+          });
+        }
+        
+        // Reasignar el orden ahora que sabemos exactamente cuántos hay
+        // El primero tendrá el # mayor (ej. 8), el último tendrá el 1.
+        for (var j = 0; j < banners.length; j++) {
+            banners[j].orden = banners.length - j;
+        }
+        
+        if (banners.length > 0) {
+          post('bannersExtraidos', { banners: banners });
+        }
+      }
+      
+      // Intentar extraer después de cargar porque los sliders de React/Vue tardan en renderizar
+      window.addEventListener('load', function() {
+        setTimeout(extraerBanners, 1500);
+      });
+      // También intentar inmediatamente por si acaso
+      setTimeout(extraerBanners, 2000);
+    })();
+  `);
+});
+
+// =========================================================================
+// HEAD SCRIPT: Intercepta pushState/replaceState.
+// - Convierte URLs absolutas de kevins.com.co a relativas (same-origin)
+// - Solo notifica al padre cuando el PATH realmente cambia (no en hovers)
+// - Usa debounce de 400ms para no interferir con menús desplegables
+// =========================================================================
+function getHeadScript() {
+  return `<script>
+(function(){
+  var _push    = history.pushState.bind(history);
+  var _replace = history.replaceState.bind(history);
+
+  // Convierte URL absoluta de kevins a relativa para proxy
+  function convertirUrl(url) {
+    if (!url || typeof url !== 'string') return url;
+    if (url.match(/https?:\\/\\/kevins\\.com\\.co/)) {
+      var path = url.replace(/https?:\\/\\/kevins\\.com\\.co/, '');
+      return path || '/';
+    }
+    return url;
+  }
+
+  // Extrae solo el pathname de una URL (ignora query y hash)
+  function getPath(url) {
+    if (!url) return '';
+    try { return new URL(url, window.location.origin).pathname; }
+    catch(e) { return url.split('?')[0].split('#')[0]; }
+  }
+
+  // Se almacena el último path notificado para no enviar duplicados
+  var _lastNotifiedPath = getPath(window.location.pathname);
+  var _notifyTimer = null;
+
+  function notificarSiCambio(url) {
+    var fullUrl = (typeof url === 'string' && !url.startsWith('http'))
+      ? '${TARGET}' + (url.startsWith('/') ? url : '/' + url)
+      : (url || window.location.href);
+
+    var newPath = getPath(fullUrl);
+    // Si el path no cambió (ej: hover de menú) → no avisar
+    if (newPath === _lastNotifiedPath) return;
+
+    // Debounce de 400ms: si viene otro pushState rápido, se cancela el anterior
+    clearTimeout(_notifyTimer);
+    _notifyTimer = setTimeout(function() {
+      _lastNotifiedPath = newPath;
+      try { window.parent.postMessage({ tipo: 'navegacion', url: fullUrl }, '*'); } catch(e){}
+    }, 400);
+  }
+
+  history.pushState = function(state, title, url) {
+    var safeUrl = convertirUrl(url);
+    try { _push(state, title, safeUrl); } catch(err) {
+      console.log('pushState corregido:', safeUrl);
+    }
+    // Solo notifica si el path realmente cambió
+    notificarSiCambio(url);
+  };
+
+  // replaceState: solo convierte URL, NO notifica (se usa para cambios de estado sin navegación)
+  history.replaceState = function(state, title, url) {
+    var safeUrl = convertirUrl(url);
+    try { _replace(state, title, safeUrl); } catch(err){}
+  };
+
+  // Suprimir errores de SecurityError
+  window.addEventListener('error', function(e) {
+    if (e.message && (
+      e.message.includes('SecurityError') ||
+      e.message.includes('pushState') ||
+      e.message.includes('history')
+    )) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return false;
+    }
+  }, true);
+
+  window.addEventListener('unhandledrejection', function(e) {
+    if (e.reason && e.reason.toString().includes('SecurityError')) {
+      e.preventDefault();
+    }
+  });
+
+  console.log('History interceptor activo (path-change + debounce)');
+})();
+</script>`;
+}
+
+// Descomprimir respuesta
+function descomprimir(data, encoding) {
+  try {
+    if (encoding === 'gzip')    return zlib.gunzipSync(data);
+    if (encoding === 'deflate') return zlib.inflateSync(data);
+    if (encoding === 'br')      return zlib.brotliDecompressSync(data);
+  } catch(e) { console.warn('⚠️ Descomprimir:', e.message); }
+  return data;
+}
+
+// Proxy principal
+app.use('/kevins', async (req, res) => {
+  try {
+    const rutaOriginal = req.url || '/';
+    const urlDestino   = TARGET + rutaOriginal;
+    console.log('Proxy →', urlDestino);
+
+    const response = await axios.get(urlDestino, {
+      responseType: 'arraybuffer',
+      headers: {
+        'User-Agent'     : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0',
+        'Accept'         : '*/*',
+        'Accept-Language': 'es-CO,es;q=0.9',
+        'Accept-Encoding': 'gzip, deflate',
+        'Referer'        : TARGET,
+        'Origin'         : TARGET
+      },
+      maxRedirects : 10,
+      timeout      : 20000,
+      validateStatus: () => true
+    });
+
+    const contentType = response.headers['content-type'] || 'text/html';
+    const encoding    = response.headers['content-encoding'];
+    const bodyBuffer  = descomprimir(response.data, encoding);
+    let   content     = bodyBuffer.toString('utf-8');
+
+    console.log(`${response.status} | ${content.length} bytes | ${contentType}`);
+
+    if (contentType.includes('text/html')) {
+
+      // 🔑 CLAVE: Eliminar <base href> original de kevins
+      content = content.replace(/<base[^>]*>/gi, '');
+
+      // 🔑 CLAVE: Inyectar nuevo <base href="/kevins/"> para que
+      //    el router de kevins use rutas del proxy (/kevins/ruta)
+      //    y pushState sea siempre same-origin (localhost:3001)
+      const baseTag    = `<base href="/kevins/">`;
+      const trackerTag = `<script src="${BASE_URL}/tracker.js?t=${Date.now()}"></script>`;
+      const headScript = getHeadScript();
+
+      // Inyectar PRIMERO en <head> (antes de scripts de kevins)
+      if (content.includes('<head>')) {
+        content = content.replace('<head>', `<head>${baseTag}${headScript}`);
+      } else if (content.includes('<HEAD>')) {
+        content = content.replace('<HEAD>', `<HEAD>${baseTag}${headScript}`);
+      } else {
+        content = baseTag + headScript + content;
+        
+      }
+
+      // Tracker al final
+      content = content.includes('</body>')
+        ? content.replace('</body>', `${trackerTag}</body>`)
+        : content + trackerTag;
+    }
+
+    res.set({
+      'Content-Type'               : contentType,
+      'Access-Control-Allow-Origin': '*',
+      'X-Frame-Options'            : 'ALLOWALL',
+      'Content-Security-Policy'    : "frame-ancestors *; script-src * 'unsafe-inline' 'unsafe-eval';",
+      'Cache-Control'              : 'no-cache'
+    });
+
+    res.status(response.status).send(content);
+
+  } catch (err) {
+    console.error('❌ Error:', err.message);
+    res.status(500).send(`
+      <html>
+        <body style="font-family:sans-serif;padding:30px;">
+          <h2>❌ Error Proxy</h2>
+          <p><b>Ruta:</b> ${req.url}</p>
+          <p><b>Error:</b> ${err.message}</p>
+          <button onclick="history.back()">⬅ Volver</button>
+          <button onclick="location.reload()">🔄 Reintentar</button>
+        </body>
+      </html>
+    `);
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`Proxy NAVEGACION LIVE BANNERS`);
+  console.log(`kevins  : ${BASE_URL}/kevins`);
+  console.log(`tracker : ${BASE_URL}/tracker.js`);
+});
