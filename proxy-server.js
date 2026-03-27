@@ -68,15 +68,23 @@ app.get('/tracker.js', (req, res) => {
     (function(){
       const ORIGINAL = 'https://kevins.com.co';
 
-      // ── Convierte URLs del proxy (localhost) a la URL original de kevins ──
+      // ── Convierte URLs del proxy (cualquier origen) a la URL original de Kevins ──
+      // Funciona tanto en localhost:3001 como en Render u otro host.
       function toOriginal(url) {
         if (!url) return url;
-        if (url.includes('localhost')) {
-          const match = url.match(/localhost:\\d+(?:\\/kevins)?(\\/.*)?$/);
-          return ORIGINAL + (match && match[1] ? match[1] : '/');
+        var proxyOrigin = window.location.origin; // ej: https://bannersproxy.onrender.com
+        // Caso 1: URL absoluta del proxy actual (localhost o Render)
+        if (url.startsWith(proxyOrigin)) {
+          var path = url.substring(proxyOrigin.length); // ej: /kevins/busqueda/...
+          if (path.startsWith('/kevins')) path = path.substring('/kevins'.length) || '/';
+          return ORIGINAL + (path || '/');
         }
-        if (url.startsWith(ORIGINAL)) return url;
+        // Caso 2: URL relativa /kevins/...
         if (url.startsWith('/kevins/')) return ORIGINAL + url.substring('/kevins'.length);
+        if (url.startsWith('/kevins')) return ORIGINAL + '/';
+        // Caso 3: Ya es URL original
+        if (url.startsWith(ORIGINAL)) return url;
+        // Caso 4: Relativa simple
         if (url.startsWith('/')) return ORIGINAL + url;
         return url;
       }
