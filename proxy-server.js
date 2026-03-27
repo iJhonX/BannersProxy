@@ -232,20 +232,6 @@ app.get('/tracker.js', (req, res) => {
           var srcMobile = '';
           var srcWeb = '';
 
-          // ── Helper: reemplaza cualquier variante de "web" por "mobile" (case-insensitive)
-          function inferirUrlMobile(url) {
-            if (!url) return '';
-            var resultado = url.replace(/([_\-])web(\.[a-z]{3,4}(\?.*)?)?$/i, function(match, sep, ext) {
-              return sep + 'mobile' + (ext || '');
-            });
-            if (resultado === url) {
-              resultado = url.replace(/web/gi, function(m) {
-                return m === m.toUpperCase() ? 'Mobile' : 'mobile';
-              });
-            }
-            return resultado !== url ? resultado : '';
-          }
-
           var picturePadre = el.closest('picture');
           if (picturePadre) {
              var sources = picturePadre.querySelectorAll('source');
@@ -254,29 +240,40 @@ app.get('/tracker.js', (req, res) => {
                  var srcset = sources[s].getAttribute('srcset');
                  if (!srcset) continue;
                  var parsedUrl = toOriginal(srcset.split(' ')[0]);
-
-                 var esMobile = media.includes('max-width') || media.includes('mobile')
-                             || /mobile/i.test(parsedUrl);
-                 var esWeb    = media.includes('min-width') || media.includes('desktop')
-                             || /[_\-]web(\.|$)/i.test(parsedUrl);
-
-                 if (esMobile) { if (!srcMobile) srcMobile = parsedUrl; }
-                 else if (esWeb) { if (!srcWeb) srcWeb = parsedUrl; }
+                 
+                 // El web suele tener min-width, el mobile max-width
+                 if (media.includes('max-width') || media.includes('mobile') || parsedUrl.includes('_Mobile') || parsedUrl.includes('_mobile')) {
+                     if (!srcMobile) srcMobile = parsedUrl;
+                 } else if (media.includes('min-width') || media.includes('desktop') || parsedUrl.includes('_WEB') || parsedUrl.includes('_web')) {
+                     if (!srcWeb) srcWeb = parsedUrl;
+                 }
              }
           }
 
+          // Si identificamos explícitamente el Web y el Mobile dentro del picture
           if (srcWeb) {
-             src = srcWeb;
-          } else if (typeof src === 'string' && /mobile/i.test(src)) {
+             src = srcWeb; // Forzar el src principal a ser el WEB
+             } else if (typeof src === 'string' && (src.includes('_Mobile') || src.includes('_mobile') || src.includes('mobile'))) {
+             // Si no hay picture pero la imagen suelta es la móvil (lo cual ocurre al escanear headless viewport), lo invertimos.
              srcMobile = toOriginal(src);
-             src = toOriginal(src.replace(/mobile/gi, function(m) {
-               return m === m.toUpperCase() ? 'WEB' : 'web';
-             }));
+             src = toOriginal(
+                 src.replace('_Mobile', '_WEB')
+                    .replace('_mobile', '_web')
+                    .replace('mobile', 'web')
+                    .replace('Mobile', 'Web')
+             );
           } else if (!srcMobile && typeof src === 'string') {
-             var inferida = inferirUrlMobile(src);
-             if (inferida) srcMobile = toOriginal(inferida);
+             // Fallback Heurístico para detectar el móvil si solo tenemos el WEB
+             if (src.includes('_WEB')) {
+                 srcMobile = toOriginal(src.replace('_WEB', '_Mobile'));
+             } else if (src.includes('_web')) {
+                 srcMobile = toOriginal(src.replace('_web', '_mobile'));
+             } else if (src.includes('web')) {
+                 srcMobile = toOriginal(src.replace('web', 'mobile'));
+             } else if (src.includes('Web')) {
+                 srcMobile = toOriginal(src.replace('Web', 'Mobile'));
+             }
           }
-
 
           src = toOriginal(src);
 
@@ -500,13 +497,7 @@ app.use('/kevins', async (req, res) => {
       //    el router de kevins use rutas del proxy (/kevins/ruta)
       //    y pushState sea siempre same-origin (localhost:3001)
       const baseTag    = `<base href="/kevins/">`;
-      // Derivar la URL pública del proxy desde los headers del request.
-      // En Render: x-forwarded-proto = https, x-forwarded-host = bannersproxy.onrender.com
-      // En local : host = localhost:3001
-      const reqProto   = req.headers['x-forwarded-proto'] || 'http';
-      const reqHost    = req.headers['x-forwarded-host'] || req.headers['host'] || `localhost:${PORT}`;
-      const reqBaseUrl = `${reqProto}://${reqHost}`;
-      const trackerTag = `<script src="${reqBaseUrl}/tracker.js?t=${Date.now()}"></script>`;
+      const trackerTag = `<script src="${BASE_URL}/tracker.js?t=${Date.now()}"></script>`;
       const headScript = getHeadScript();
 
       // Inyectar PRIMERO en <head> (antes de scripts de kevins)
