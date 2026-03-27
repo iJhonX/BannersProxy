@@ -253,25 +253,27 @@ app.get('/tracker.js', (req, res) => {
           // Si identificamos explícitamente el Web y el Mobile dentro del picture
           if (srcWeb) {
              src = srcWeb; // Forzar el src principal a ser el WEB
-             } else if (typeof src === 'string' && (src.includes('_Mobile') || src.includes('_mobile') || src.includes('mobile'))) {
+             } else if (typeof src === 'string' && (src.includes('_Mobile') || src.includes('_mobile') || src.includes('mobile') || src.includes('Mobile'))) {
              // Si no hay picture pero la imagen suelta es la móvil (lo cual ocurre al escanear headless viewport), lo invertimos.
              srcMobile = toOriginal(src);
+             // Usamos Regex para asegurar que solo reemplazamos en el nombre del archivo (después del último slash)
+             // Esto evita romper dominios como kevinsweb.blob.core.windows.net
              src = toOriginal(
-                 src.replace('_Mobile', '_WEB')
-                    .replace('_mobile', '_web')
-                    .replace('mobile', 'web')
-                    .replace('Mobile', 'Web')
+                 src.replace(/_Mobile([^\/]*)$/, '_WEB$1')
+                    .replace(/_mobile([^\/]*)$/, '_web$1')
+                    .replace(/mobile([^\/]*)$/, 'web$1')
+                    .replace(/Mobile([^\/]*)$/, 'Web$1')
              );
           } else if (!srcMobile && typeof src === 'string') {
              // Fallback Heurístico para detectar el móvil si solo tenemos el WEB
              if (src.includes('_WEB')) {
-                 srcMobile = toOriginal(src.replace('_WEB', '_Mobile'));
+                 srcMobile = toOriginal(src.replace(/_WEB([^\/]*)$/, '_Mobile$1'));
              } else if (src.includes('_web')) {
-                 srcMobile = toOriginal(src.replace('_web', '_mobile'));
+                 srcMobile = toOriginal(src.replace(/_web([^\/]*)$/, '_mobile$1'));
              } else if (src.includes('web')) {
-                 srcMobile = toOriginal(src.replace('web', 'mobile'));
+                 srcMobile = toOriginal(src.replace(/web([^\/]*)$/, 'mobile$1'));
              } else if (src.includes('Web')) {
-                 srcMobile = toOriginal(src.replace('Web', 'Mobile'));
+                 srcMobile = toOriginal(src.replace(/Web([^\/]*)$/, 'Mobile$1'));
              }
           }
 
