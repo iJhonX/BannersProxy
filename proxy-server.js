@@ -284,35 +284,43 @@ app.get('/tracker.js', (req, res) => {
           var enlaceUrl = aTag ? (aTag.getAttribute('href') || aTag.href) : '';
           
           if (!enlaceUrl) {
-              // Si la imagen/video no está envuelto en <a>, buscar en su contenedor (ej: swiper-slide)
-              var slidePadre = el.closest('[class*="slide" i], [class*="item" i], div');
+              var slidePadre = el.closest('[class*="slide" i], [class*="item" i], [class*="banner" i], div');
               if (slidePadre) {
-                  var aHijo = slidePadre.querySelector('a');
+                  var aHijo = slidePadre.querySelector('a[href], a[routerlink]');
                   if (aHijo) {
-                      enlaceUrl = aHijo.getAttribute('href') || aHijo.href;
+                      enlaceUrl = aHijo.getAttribute('href') || aHijo.href || '';
                   }
-                  // Si es un div clickeable de Angular (routerLink)
                   if (!enlaceUrl) {
-                      enlaceUrl = slidePadre.getAttribute('ng-reflect-router-link') || slidePadre.getAttribute('data-href') || '';
+                      enlaceUrl = slidePadre.getAttribute('ng-reflect-router-link')
+                              || slidePadre.getAttribute('routerlink')
+                              || slidePadre.getAttribute('data-href')
+                              || slidePadre.getAttribute('data-link')
+                              || '';
                   }
               }
-              // Comprobación directa en los padres más cercanos por si tienen routerLink
-              if (!enlaceUrl && el.parentElement) {
-                  enlaceUrl = el.parentElement.getAttribute('ng-reflect-router-link') || '';
-              }
-              if (!enlaceUrl) {
-                  enlaceUrl = el.getAttribute('ng-reflect-router-link') || '';
+              var padreActual = el.parentElement;
+              for (var p = 0; p < 5 && padreActual && !enlaceUrl; p++) {
+                  enlaceUrl = padreActual.getAttribute('ng-reflect-router-link')
+                           || padreActual.getAttribute('routerlink')
+                           || padreActual.getAttribute('data-href') || '';
+                  var aEnPadre = padreActual.querySelector(':scope > a');
+                  if (!enlaceUrl && aEnPadre) {
+                      enlaceUrl = aEnPadre.getAttribute('href') || aEnPadre.href || '';
+                  }
+                  padreActual = padreActual.parentElement;
               }
           }
+
+          if (enlaceUrl) enlaceUrl = toOriginal(enlaceUrl);
 
           banners.push({
             id: 'banner-auto-' + banners.length,
             archivo: archivo,
-            activo: true, // UI
+            activo: true,
             type: isVideo ? 'VIDEO' : 'IMAGEN',
             src: toOriginal(src),
             srcMobile: srcMobile,
-            tieneMobile: !!srcMobile, // Indicar a la UI explícitamente que detectamos imagen móvil
+            tieneMobile: !!srcMobile,
             alt: archivo,
             seccion: 'home',
             ruta: enlaceUrl,
