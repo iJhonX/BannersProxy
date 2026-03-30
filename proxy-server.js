@@ -352,12 +352,17 @@ app.get('/tracker.js', (req, res) => {
         }
       }
       
-      // Intentar extraer después de cargar porque los sliders de React/Vue tardan en renderizar
+      // 1ª pasada rápida: captura imágenes y dimensiones (Angular aún no hidrata links)
       window.addEventListener('load', function() {
         setTimeout(extraerBanners, 1500);
       });
-      // También intentar inmediatamente por si acaso
       setTimeout(extraerBanners, 2000);
+
+      // 2ª pasada tardía: Angular ya asignó href a los <a [routerLink]>, captura los links
+      setTimeout(extraerBanners, 5500);
+
+      // 3ª pasada de seguridad: para sitios pesados que tardan más en hidratar
+      setTimeout(extraerBanners, 9000);
     })();
   `);
 });
