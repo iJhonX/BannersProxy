@@ -112,67 +112,79 @@ app.get('/tracker.js', (req, res) => {
       // ── CLICK GENERAL ──
       // Usamos fase de BURBUJA (false) en vez de captura (true)
       document.addEventListener('click', function(e) {
-        var target = e.target;
-        var before = window.location.href;
-        var pick   = target && target.closest
-          ? target.closest('a, button, [href], [onclick], [role="button"], [data-href]')
-          : null;
+        try {
+            var target = e.target;
+            if (!target) return;
+            var before = window.location.href;
+            
+            // Si es un nodo de texto, subimos a su padre elemento
+            if (target.nodeType === 3) target = target.parentNode;
+            
+            var pick = target && typeof target.closest === 'function'
+              ? target.closest('a, button, [href], [onclick], [role="button"], [data-href]')
+              : null;
 
-        // Buscar primero si lo clickeado fue directamente la imagen, o si hay una imagen dentro del link/botón
-        var imgTarget = target.tagName === 'IMG' || target.tagName === 'VIDEO' ? target : null;
-        if (!imgTarget && pick) {
-            imgTarget = pick.querySelector('img, video');
+            // Buscar primero si lo clickeado fue directamente la imagen, o si hay una imagen dentro del link/botón
+            var imgTarget = (target.tagName === 'IMG' || target.tagName === 'VIDEO') ? target : null;
+            if (!imgTarget && pick && typeof pick.querySelector === 'function') {
+                imgTarget = pick.querySelector('img, video');
+            }
+            if (!imgTarget && typeof target.closest === 'function') {
+                var slidePadre = target.closest('[class*="slide" i], [class*="item" i], [class*="banner" i], .banner');
+                if (slidePadre) imgTarget = slidePadre.querySelector('img, video');
+            }
+
+            var srcClickeado = imgTarget ? (imgTarget.currentSrc || imgTarget.src) : '';
+            if (!srcClickeado && pick && pick.nodeType === 1) {
+                var style = window.getComputedStyle(pick);
+                if (style.backgroundImage && style.backgroundImage !== 'none') {
+                    srcClickeado = style.backgroundImage.slice(4, -1).replace(/["']/g, "");
+                }
+            }
+            if (!srcClickeado && target && target.nodeType === 1) {
+                var tStyle = window.getComputedStyle(target);
+                if (tStyle.backgroundImage && tStyle.backgroundImage !== 'none') {
+                    srcClickeado = tStyle.backgroundImage.slice(4, -1).replace(/["']/g, "");
+                }
+            }
+            if (srcClickeado) srcClickeado = toOriginal(srcClickeado.split(' ')[0]);
+
+            var texto = pick ? (pick.textContent || '').trim().slice(0, 80) : '';
+            var elemento = pick
+              ? (pick.tagName + (pick.className ? '.' + String(pick.className).split(' ')[0] : ''))
+              : 'UNKNOWN';
+
+            // Siempre enviamos el click si detectamos un SRC, asumiendo click en banner, 
+            // aunque el router tarde en procesar la URL. Esperamos 500ms para atrapar la nueva ruta.
+            setTimeout(function() {
+              var after = window.location.href;
+              var href = pick ? (pick.href || pick.getAttribute('href') || pick.dataset.href || '') : '';
+              
+              var finalUrl = '';
+              if (after !== before) {
+                  finalUrl = after; // Prioridad 1: Navegación real completada
+              } else if (href && !href.startsWith('javascript') && !href.startsWith('#')) {
+                  finalUrl = href; // Prioridad 2: Atributo href presente
+              } else if (srcClickeado) {
+                  finalUrl = window.location.href; // Prioridad 3: Garantizar el evento! Envía la actual si no cambió.
+              } else {
+                  return; // Si no navegó, no hay href, y no tocaste una foto, no es de interés.
+              }
+
+              postDebounced('clickReal', {
+                  url      : toOriginal(finalUrl),
+                  texto    : texto,
+                  titulo   : document.title,
+                  posicion : { x: Math.round(e.clientX), y: Math.round(e.clientY) },
+                  elemento : elemento,
+                  srcClick : srcClickeado || '',
+                  timestamp: Date.now()
+              });
+            }, 500); // 500ms da tiempo de sobra a cualquier SPA a actualizar window.location
+        } catch(ex) {
+            console.error('Error procesando click en tracker:', ex);
         }
-        if (!imgTarget) {
-            var slidePadre = target.closest('[class*="slide" i], [class*="item" i], [class*="banner" i]');
-            if (slidePadre) imgTarget = slidePadre.querySelector('img, video');
-        }
-
-        var srcClickeado = imgTarget ? (imgTarget.currentSrc || imgTarget.src) : '';
-        if (srcClickeado) srcClickeado = toOriginal(srcClickeado);
-
-        var texto    = pick ? (pick.textContent || '').trim().slice(0, 80) : '';
-        var elemento = pick
-          ? (pick.tagName + (pick.className ? '.' + String(pick.className).split(' ')[0] : ''))
-          : 'UNKNOWN';
-
-        // Esperamos a que el router SPA de Kevins procese la navegación
-        setTimeout(function() {
-          var after = window.location.href;
-
-          // CASO 1: La URL cambió → la nueva URL es la categoría/producto
-          if (after !== before) {
-            postDebounced('clickReal', {
-              url      : toOriginal(after),
-              texto    : texto,
-              titulo   : document.title,
-              posicion : { x: Math.round(e.clientX), y: Math.round(e.clientY) },
-              elemento : elemento,
-              srcClick : srcClickeado,
-              timestamp: Date.now()
-            });
-            return;
-          }
-
-          // CASO 2: La URL no cambió pero el elemento tiene href directo
-          var href = pick && (pick.href || pick.getAttribute('href') || pick.dataset.href || '');
-          if (href && !href.startsWith('javascript') && !href.startsWith('#')) {
-            postDebounced('clickReal', {
-              url      : toOriginal(href),
-              texto    : texto,
-              titulo   : document.title,
-              posicion : { x: Math.round(e.clientX), y: Math.round(e.clientY) },
-              elemento : elemento,
-              srcClick : srcClickeado,
-              timestamp: Date.now()
-            });
-            return;
-          }
-
-          // CASO 3: Sin cambio → no reportar para no pisar URLs previas
-        }, 300);
-
-      }, false);  // false = fase de BURBUJA (deja que los menús procesen primero)
+      }, false);
 
       // URL inicial al cargar la página
       post('navegacion', { url: toOriginal(window.location.href) });
