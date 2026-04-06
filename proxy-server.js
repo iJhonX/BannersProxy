@@ -56,6 +56,41 @@ app.post('/api/banners/save', (req, res) => {
     res.json({ success: true, message: 'Inyectado exitosamente.' });
 });
 
+// ── Proxy para puentear bloqueos de CORS del API (GraphQL) ─────────────
+app.use('/proxy-api', async (req, res) => {
+  try {
+    const urlDestino = 'http://apiprod.kevins.com.co' + req.url;
+    console.log('API Proxy →', urlDestino);
+
+    const opciones = {
+      method: req.method,
+      url: urlDestino,
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'Content-Type': req.header('Content-Type') || 'application/json',
+      },
+      responseType: 'arraybuffer', // Leer y devolver intacto
+      validateStatus: () => true
+    };
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      opciones.data = req.body;
+    }
+
+    const response = await axios(opciones);
+
+    res.set({
+      'Content-Type': response.headers['content-type'] || 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.status(response.status).send(response.data);
+
+  } catch (err) {
+    console.error('❌ API Error:', err.message);
+    res.status(500).send({ error: err.message });
+  }
+});
+
 // =========================================================================
 // TRACKER: Script inyectado al final del <body> de cada página de Kevins.
 // Detecta la navegación del usuario dentro del iframe y envía postMessage
@@ -388,6 +423,25 @@ app.get('/tracker.js', (req, res) => {
 function getHeadScript() {
   return `<script>
 (function(){
+
+  // ── SECUESTRO DE CORS (Redirige llamadas apiprod.kevins.com.co hacia nuestro bridge en Render) ──
+  var originalOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url) {
+      if (typeof url === 'string' && url.includes('apiprod.kevins.com.co')) {
+          url = url.replace(/https?:\\/\\/apiprod\\.kevins\\.com\\.co/i, '${BASE_URL}/proxy-api');
+      }
+      return originalOpen.apply(this, arguments);
+  };
+  
+  var originalFetch = window.fetch;
+  window.fetch = function() {
+      var args = Array.prototype.slice.call(arguments);
+      if (typeof args[0] === 'string' && args[0].includes('apiprod.kevins.com.co')) {
+          args[0] = args[0].replace(/https?:\\/\\/apiprod\\.kevins\\.com\\.co/i, '${BASE_URL}/proxy-api');
+      }
+      return originalFetch.apply(this, args);
+  };
+
   var _push    = history.pushState.bind(history);
   var _replace = history.replaceState.bind(history);
 
