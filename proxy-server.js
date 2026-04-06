@@ -57,9 +57,18 @@ app.post('/api/banners/save', (req, res) => {
 });
 
 // ── Proxy para puentear bloqueos de CORS del API (GraphQL) ─────────────
+// Soporta todos los subdominios de API que usa Kevins (apiplaxd, apiprod, etc.)
+const API_BACKENDS = [
+  'https://apiplaxd.kevins.com.co',
+  'http://apiplaxd.kevins.com.co',
+  'https://apiprod.kevins.com.co',
+  'http://apiprod.kevins.com.co',
+];
+
 app.use('/proxy-api', async (req, res) => {
   try {
-    const urlDestino = 'http://apiprod.kevins.com.co' + req.url;
+    // Detectar a cual backend apuntar segun el header X-Api-Target si existe
+    const urlDestino = 'https://apiplaxd.kevins.com.co' + req.url;
     console.log('API Proxy →', urlDestino);
 
     const opciones = {
@@ -68,8 +77,10 @@ app.use('/proxy-api', async (req, res) => {
       headers: {
         'Accept': 'application/json, text/plain, */*',
         'Content-Type': req.header('Content-Type') || 'application/json',
+        'Origin': 'https://kevins.com.co',
+        'Referer': 'https://kevins.com.co/'
       },
-      responseType: 'arraybuffer', // Leer y devolver intacto
+      responseType: 'arraybuffer',
       validateStatus: () => true
     };
 
@@ -82,12 +93,14 @@ app.use('/proxy-api', async (req, res) => {
     res.set({
       'Content-Type': response.headers['content-type'] || 'application/json',
       'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, apollographql-client-name, apollographql-client-version',
     });
     res.status(response.status).send(response.data);
 
   } catch (err) {
     console.error('❌ API Error:', err.message);
-    res.status(500).send({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -546,20 +559,24 @@ app.use('/kevins', async (req, res) => {
     console.log(`${response.status} | ${content.length} bytes | ${contentType}`);
 
     // ═══════════════════════════════════════════════════════════════════
-    // 🔑 REESCRITURA SERVIDOR: Sustituir la URL del API de Kevins por
-    //    nuestra ruta puente /proxy-api ANTES de enviar al navegador.
-    //    Así el navegador nunca hace peticiones cross-origin.
-    //    Funciona en Chrome, Edge, Firefox, Safari sin extensiones.
+    // 🔑 REESCRITURA SERVIDOR: Sustituir TODOS los subdominios de API de
+    //    Kevins por nuestra ruta puente /proxy-api ANTES de que el HTML/JS
+    //    llegue al navegador. El browser nunca ve la URL real → sin CORS.
+    //    Compatible con Chrome, Edge, Firefox y Safari sin extensiones.
     // ═══════════════════════════════════════════════════════════════════
     const isTextual = contentType.includes('text/html') ||
                       contentType.includes('javascript') ||
                       contentType.includes('text/css');
 
-    if (isTextual && content.includes('apiprod.kevins.com.co')) {
-      content = content
-        .split('https://apiprod.kevins.com.co').join(`${BASE_URL}/proxy-api`)
-        .split('http://apiprod.kevins.com.co').join(`${BASE_URL}/proxy-api`);
-      console.log('✅ API URLs reescritas en el servidor para evitar CORS en el cliente.');
+    if (isTextual) {
+      let rewritten = false;
+      API_BACKENDS.forEach(backend => {
+        if (content.includes(backend)) {
+          content = content.split(backend).join(`${BASE_URL}/proxy-api`);
+          rewritten = true;
+        }
+      });
+      if (rewritten) console.log('✅ API URLs reescritas en servidor (apiplaxd/apiprod → /proxy-api).');
     }
 
     if (contentType.includes('text/html')) {
@@ -593,8 +610,13 @@ app.use('/kevins', async (req, res) => {
       'Content-Type'               : contentType,
       'Access-Control-Allow-Origin': '*',
       'X-Frame-Options'            : 'ALLOWALL',
-      'Content-Security-Policy'    : "frame-ancestors *; script-src * 'unsafe-inline' 'unsafe-eval';",
-      'Cache-Control'              : 'no-cache'
+      'Content-Security-Policy'    : "frame-ancestors *; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src *;",
+      'Cache-Control'              : 'no-cache',
+      // Edge: Permite que el iframe acceda a localStorage (Tracking Prevention)
+      'Permissions-Policy'         : 'interest-cohort=()',
+      'Cross-Origin-Resource-Policy': 'cross-origin',
+      'Cross-Origin-Embedder-Policy': 'unsafe-none',
+      'Cross-Origin-Opener-Policy'  : 'unsafe-none'
     });
 
     res.status(response.status).send(content);
