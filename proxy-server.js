@@ -428,7 +428,8 @@ function getHeadScript() {
   var originalOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function(method, url) {
       if (typeof url === 'string' && url.includes('apiprod.kevins.com.co')) {
-          url = url.replace(/https?:\\/\\/apiprod\\.kevins\\.com\\.co/i, '${BASE_URL}/proxy-api');
+          url = url.replace('http://apiprod.kevins.com.co', '${BASE_URL}/proxy-api');
+          url = url.replace('https://apiprod.kevins.com.co', '${BASE_URL}/proxy-api');
       }
       return originalOpen.apply(this, arguments);
   };
@@ -437,7 +438,8 @@ function getHeadScript() {
   window.fetch = function() {
       var args = Array.prototype.slice.call(arguments);
       if (typeof args[0] === 'string' && args[0].includes('apiprod.kevins.com.co')) {
-          args[0] = args[0].replace(/https?:\\/\\/apiprod\\.kevins\\.com\\.co/i, '${BASE_URL}/proxy-api');
+          args[0] = args[0].replace('http://apiprod.kevins.com.co', '${BASE_URL}/proxy-api');
+          args[0] = args[0].replace('https://apiprod.kevins.com.co', '${BASE_URL}/proxy-api');
       }
       return originalFetch.apply(this, args);
   };
