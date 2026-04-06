@@ -424,25 +424,7 @@ function getHeadScript() {
   return `<script>
 (function(){
 
-  // ── SECUESTRO DE CORS (Redirige llamadas apiprod.kevins.com.co hacia nuestro bridge en Render) ──
-  var originalOpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(method, url) {
-      if (typeof url === 'string' && url.includes('apiprod.kevins.com.co')) {
-          url = url.replace('http://apiprod.kevins.com.co', '${BASE_URL}/proxy-api');
-          url = url.replace('https://apiprod.kevins.com.co', '${BASE_URL}/proxy-api');
-      }
-      return originalOpen.apply(this, arguments);
-  };
-  
-  var originalFetch = window.fetch;
-  window.fetch = function() {
-      var args = Array.prototype.slice.call(arguments);
-      if (typeof args[0] === 'string' && args[0].includes('apiprod.kevins.com.co')) {
-          args[0] = args[0].replace('http://apiprod.kevins.com.co', '${BASE_URL}/proxy-api');
-          args[0] = args[0].replace('https://apiprod.kevins.com.co', '${BASE_URL}/proxy-api');
-      }
-      return originalFetch.apply(this, args);
-  };
+  // (Reescritura de API ahora en el servidor - sin monkey-patching en el cliente)
 
   var _push    = history.pushState.bind(history);
   var _replace = history.replaceState.bind(history);
@@ -563,6 +545,23 @@ app.use('/kevins', async (req, res) => {
 
     console.log(`${response.status} | ${content.length} bytes | ${contentType}`);
 
+    // ═══════════════════════════════════════════════════════════════════
+    // 🔑 REESCRITURA SERVIDOR: Sustituir la URL del API de Kevins por
+    //    nuestra ruta puente /proxy-api ANTES de enviar al navegador.
+    //    Así el navegador nunca hace peticiones cross-origin.
+    //    Funciona en Chrome, Edge, Firefox, Safari sin extensiones.
+    // ═══════════════════════════════════════════════════════════════════
+    const isTextual = contentType.includes('text/html') ||
+                      contentType.includes('javascript') ||
+                      contentType.includes('text/css');
+
+    if (isTextual && content.includes('apiprod.kevins.com.co')) {
+      content = content
+        .split('https://apiprod.kevins.com.co').join(`${BASE_URL}/proxy-api`)
+        .split('http://apiprod.kevins.com.co').join(`${BASE_URL}/proxy-api`);
+      console.log('✅ API URLs reescritas en el servidor para evitar CORS en el cliente.');
+    }
+
     if (contentType.includes('text/html')) {
 
       // 🔑 CLAVE: Eliminar <base href> original de kevins
@@ -582,7 +581,6 @@ app.use('/kevins', async (req, res) => {
         content = content.replace('<HEAD>', `<HEAD>${baseTag}${headScript}`);
       } else {
         content = baseTag + headScript + content;
-        
       }
 
       // Tracker al final
